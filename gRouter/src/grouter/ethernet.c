@@ -17,13 +17,16 @@
 #include "ip.h"
 #include <netinet/in.h>
 #include <stdlib.h>
+#include <pthread.h>
+#include <stdio.h>
 
 
 extern pktcore_t *pcore;
 extern classlist_t *classifier;
 extern filtertab_t *filter;
 
-
+int throughput_buffer;
+int throughput_buffer_size;
 extern router_config rconfig;
 
 int findPacketSize(pkt_data_t *pkt)
@@ -41,6 +44,34 @@ int findPacketSize(pkt_data_t *pkt)
 	else
 		return sizeof(pkt_data_t);
 }
+
+
+void *print_throughput_thread(void *arg)
+{
+	//FILE * pFile;
+	static int i = 0;
+	//pFile = fopen("output.txt","w");
+	//fprintf(pFile, "Test");
+	//fclose(pFile);
+	sleep(10);
+	while(1)
+	{
+		i = i+10;
+		sleep(10);
+		verbose(1,"Time: %ds Throughput: %d bytes, Packets: %d",i,throughput_buffer, throughput_buffer_size);
+		//fprintf(pFile, "Time: %ds Throughput: %d bytes\n",i, throughput_buffer);
+		throughput_buffer = 0;
+		throughput_buffer_size = 0;
+	}
+}
+
+void eth_init()
+{
+	pthread_t tid;
+	pthread_create(&tid, NULL, &print_throughput_thread, NULL);
+}
+
+
 
 
 void *toEthernetDev(void *arg)
@@ -63,6 +94,10 @@ void *toEthernetDev(void *arg)
 			COPY_IP(apkt->src_ip_addr, gHtonl(tmpbuf, iface->ip_addr));
 		}
 		pkt_size = findPacketSize(&(inpkt->data));
+
+		throughput_buffer = throughput_buffer + pkt_size;
+		throughput_buffer_size++;
+
 		verbose(2, "[toEthernetDev]:: vpl_sendto called for interface %d..%d bytes written ", iface->interface_id, pkt_size);
 		vpl_sendto(iface->vpl_data, &(inpkt->data), pkt_size);
 		free(inpkt);          // finally destroy the memory allocated to the packet..

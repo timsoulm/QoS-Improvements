@@ -742,6 +742,7 @@ int GNETInit(int *ghandler, char *config_dir, char *rname, simplequeue_t *sq)
 
 }
 
+
 void *GNETHandler(void *outq)
 {
 	char tmpbuf[MAX_NAME_LEN];
