@@ -60,5 +60,6 @@ double getAvgByteRate(simplequeue_t *sq);
 
 int readQueue(simplequeue_t *msgqueue, void **data, int *size);
 int peekQueue(simplequeue_t *msgqueue, void **data, int *size);
+int IsQueueEmpty(simplequeue_t *msgqueue);
 
 #endif

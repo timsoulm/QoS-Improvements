@@ -17,21 +17,30 @@
 // TODO: Debug this function..
 
 extern router_config rconfig;
-
+// WCWeightFairQueuer: function called by the classifier to enqueue
+// the packets..
+// TODO: Debug this function...
 void *weightedFairScheduler(void *pc)
 {
 	pktcore_t *pcore = (pktcore_t *)pc;
 	List *keylst;
-	simplequeue_t *nxtq, *thisq;
-	char *nxtkey, *savekey;
-	double minftime, minstime, tweight;
-	int pktsize, npktsize;
-	gpacket_t *in_pkt, *nxt_pkt;
+	int nextqid, qcount, rstatus, pktsize;
+	char *nextqkey;
+	gpacket_t *in_pkt;
+	simplequeue_t *nextq;
 
-	pthread_setcanceltype(PTHREAD_CANCEL_ASYNCHRONOUS, NULL);       // die as soon as cancelled
+	long queueSizes[100]; //Array to store bytes sent for each queue id
+	int PacketsSent[10];
+	int i, j;//To iterate through the queue length array
+	long crtStarvedQid;
+	double crtStarvedQidWeight;
+
+	pthread_setcanceltype(PTHREAD_CANCEL_ASYNCHRONOUS, NULL);
 	while (1)
 	{
-		verbose(2, "[weightedFairScheduler]:: Worst-case weighted fair queuing scheduler processing..");
+		verbose(1, "[weightedFairScheduler]:: Weighted Fair Queue schedule processing... ");
+		keylst = map_keys(pcore->queues);
+		qcount = list_length(keylst);
 
 		pthread_mutex_lock(&(pcore->qlock));
 		if (pcore->packetcnt == 0)
@@ -40,125 +49,71 @@ void *weightedFairScheduler(void *pc)
 
 		pthread_testcancel();
 
-		keylst = map_keys(pcore->queues);
-		while (list_has_next(keylst) == 1)
-		{
-			nxtkey = list_next(keylst);
-			nxtq = map_get(pcore->queues, nxtkey);
-			if (nxtq->cursize == 0)
+			 for(i = 0; i <qcount; i++)
+			 {
+				nextqkey = list_item(keylst, i);
+				// get the queue..
+				nextq = map_get(pcore->queues, nextqkey);			 	
+			 	if(GetQueueSize(nextq) > 0)
+			 	{
+			 		crtStarvedQidWeight = (queueSizes[i] / (nextq->weight) ); //TODO
+			 		crtStarvedQid = i;
+			 		break;
+			 	}
+			 }
+
+			 if(i == qcount)
+			 {
+			 	
+			 	list_release(keylst);
+				usleep(rconfig.schedcycle);
 				continue;
-			if ((nxtq->stime <= pcore->vclock) && (nxtq->ftime < minftime))
+			 }
+
+			for(j = i; j < qcount; j++)
 			{
-				savekey = nxtkey;
-				minftime = nxtq->ftime;
+				nextqkey = list_item(keylst, j);
+				// get the queue..
+				nextq = map_get(pcore->queues, nextqkey);
+				if(( (queueSizes[j] / (nextq->weight)) < crtStarvedQidWeight) && (GetQueueSize(nextq) > 0)) //TODO
+				{
+					crtStarvedQid = j;
+					crtStarvedQidWeight = queueSizes[j] / (nextq->weight) ; //TODO
+				}
 			}
-		}
-		list_release(keylst);
-
-		// if savekey is NULL then release the lock..
-		if (savekey == NULL)
-			continue;
-		else
-		{
-			thisq = map_get(pcore->queues, savekey);
-			readQueue(thisq, (void **)&in_pkt, &pktsize);
-			writeQueue(pcore->workQ, in_pkt, pktsize);
-			pthread_mutex_lock(&(pcore->qlock));
-			pcore->packetcnt--;
-			pthread_mutex_unlock(&(pcore->qlock));
-
-			peekQueue(thisq, (void **)&nxt_pkt, &npktsize);
-			if (npktsize)
+			nextqid = crtStarvedQid;
+			nextqkey = list_item(keylst, nextqid);
+			// get the queue..
+			nextq = map_get(pcore->queues, nextqkey);
+			// read the queue..
+			rstatus = readQueue(nextq, (void **)&in_pkt, &pktsize);//Here we get the packet size.
+			
+			
+			if (rstatus == EXIT_SUCCESS)
 			{
-				thisq->stime = thisq->ftime;
-				thisq->ftime = thisq->stime + npktsize/thisq->weight;
+				writeQueue(pcore->workQ, in_pkt, pktsize);
+				verbose(1, "[weightedFairScheduler---Just sent]:: Queue[%d] has now sent %lu bytes", nextqid, queueSizes[nextqid]);
+				queueSizes[nextqid] = queueSizes[nextqid] + findPacketSize(&(in_pkt->data));//Storing updated data sent in array
+				PacketsSent[nextqid]++;
+				
 			}
-
-			minstime = thisq->stime;
-			tweight = 0.0;
 		
-			keylst = map_keys(pcore->queues);
-			while (list_has_next(keylst) == 1)
+			for(i = 0; i <qcount; i++)	
 			{
-				nxtkey = list_next(keylst);
-				nxtq = map_get(pcore->queues, nxtkey);
-				tweight += nxtq->weight;
-				if ((nxtq->cursize > 0) && (nxtq->stime < minstime))
-					minstime = nxtq->stime;
+				nextqkey = list_item(keylst, i);
+				// get the queue..
+				nextq = map_get(pcore->queues, nextqkey);
+				verbose(1, "Packets Queued[%d] = %d,  Bytes sent = %d, Packets Sent = %d", i, GetQueueSize(nextq), queueSizes[i], PacketsSent[i]);
 			}
 			list_release(keylst);
-			pcore->vclock = max(minstime, (pcore->vclock + ((double)pktsize)/tweight));
-		}
-	}
-}
 
-
-
-
-// WCWeightFairQueuer: function called by the classifier to enqueue
-// the packets.. 
-// TODO: Debug this function...
-int weightedFairQueuer(pktcore_t *pcore, gpacket_t *in_pkt, int pktsize, char *qkey)
-{
-	simplequeue_t *thisq, *nxtq;
-	double minftime, minstime, tweight;
-	List *keylst;
-	char *nxtkey, *savekey;
-
-	verbose(2, "[weightedFairQueuer]:: Worst-case weighted fair queuing scheduler processing..");
-
-	pthread_mutex_lock(&(pcore->qlock));
-
-	thisq = map_get(pcore->queues, qkey);
-	if (thisq == NULL)
-	{
-		fatal("[weightedFairQueuer]:: Invalid %s key presented for queue addition", qkey);
-		pthread_mutex_unlock(&(pcore->qlock));
-		return EXIT_FAILURE;             // packet dropped..
-	}
-
-	printf("Checking the queue size \n");
-	if (thisq->cursize == 0)
-	{
-		verbose(2, "[weightedFairQueuer]:: inserting the first element.. ");
-		thisq->stime = max(pcore->vclock, thisq->ftime);
-		thisq->ftime = thisq->stime + pktsize/thisq->weight;
-
-		minstime = thisq->stime;
-
-		keylst = map_keys(pcore->queues);
+			pthread_mutex_lock(&(pcore->qlock));
+			if (rstatus == EXIT_SUCCESS) 
+			{
+				(pcore->packetcnt)--;
+			}
+			pthread_mutex_unlock(&(pcore->qlock));
 		
-		while (list_has_next(keylst) == 1)
-		{
-			nxtkey = list_next(keylst);
-
-			nxtq = map_get(pcore->queues, nxtkey);
-			
-			if ((nxtq->cursize > 0) && (nxtq->stime < minstime))
-				minstime = nxtq->stime;
-		}
-		list_release(keylst);
-
-		pcore->vclock = max(minstime, pcore->vclock);
-		// insert the packet... and increment variables..
-		writeQueue(thisq, in_pkt, pktsize);
-		pcore->packetcnt++;
-
-		// wake up scheduler if it was waiting..
-		if (pcore->packetcnt == 1)
-			pthread_cond_signal(&(pcore->schwaiting));
-		pthread_mutex_unlock(&(pcore->qlock));
-		return EXIT_SUCCESS;
-	} else if (thisq->cursize < thisq->maxsize)
-	{
-		// insert packet and setup variables..
-		writeQueue(thisq, in_pkt, pktsize);
-		pcore->packetcnt++;
-		pthread_mutex_unlock(&(pcore->qlock));
-		return EXIT_SUCCESS;
-	} else {
-		verbose(2, "[weightedFairQueuer]:: Packet dropped.. Queue for %s is full ", qkey);
-		pthread_mutex_unlock(&(pcore->qlock));
-		return EXIT_SUCCESS;
+			usleep(rconfig.schedcycle);
 	}
 }

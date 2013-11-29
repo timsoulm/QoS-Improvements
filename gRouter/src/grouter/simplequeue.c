@@ -229,8 +229,17 @@ double getAvgByteRate(simplequeue_t *sq)
 }
 
 
-
-
+int GetQueueSize(simplequeue_t *msgqueue)
+{
+	if (msgqueue->cursize <= 0)
+	{
+		return 0;
+	} 
+	else
+	{
+		return (msgqueue->cursize);
+	}
+}
 
 // get the next element without actually removing it from the queeue.
 int peekQueue(simplequeue_t *msgqueue, void **data, int *size)
